@@ -28,37 +28,38 @@ var fontset = [...]byte{
 }
 
 type system struct {
-	display [32][64]byte // 64x32 Display
+	Display [32][64]byte // 64x32 Display
+	keys    [16]bool     // Array of Keys 1-F
 
-	pc          uint16   // Programm Counter
-	mem         []byte   // Memory
-	V           []byte   // Registers V0 -VF
-	index_r     uint16   // Index Register I
-	stack       []uint16 // Stack *only used for subroutines
-	stack_p     byte     // Stack Pointer
-	flag_draw   bool
+	pc          uint16     // Programm Counter
+	mem         [4096]byte // Memory
+	V           [16]byte   // Registers V0 -VF
+	index_r     uint16     // Index Register I
+	stack       [16]uint16 // Stack *only used for subroutines
+	stack_p     byte       // Stack Pointer
+	Flag_draw   bool
 	delay_timer byte
-	sound_time  byte
+	sound_timer byte
 }
 
-var e system
-
-func init() {
-	e.pc = 0x200
-	e.mem = make([]byte, 4096)
-	e.V = make([]byte, 16)
-	e.index_r = 0x0
-	e.stack = make([]uint16, 16)
-	e.stack_p = 0x0
+func Init() system {
+	e := system{
+		pc: 0x200,
+	}
+	return e
 }
 
-func load_buildin_font() {
+func (e *system) Get_display() [32][64]byte {
+	return e.Display
+}
+
+func (e *system) Load_buildin_font() {
 	for i, v := range fontset {
 		e.mem[i] = v
 	}
 }
 
-func load_rom(path string) {
+func (e *system) Load_rom(path string) {
 
 	file, err := os.Open(path)
 
@@ -74,22 +75,51 @@ func load_rom(path string) {
 	defer file.Close()
 }
 
-func emulate_cycle() {
+func (e *system) Press_key(key uint8) {
+	e.keys[key] = true
+}
+
+func (e *system) Release_key(key uint8) {
+	e.keys[key] = false
+}
+
+func (e *system) Emulate_cycle() {
 	// Fetch
-	fmt.Printf("%x\n", e.pc)
 	var opcode uint16
 	opcode = uint16(e.mem[e.pc])<<8 | uint16(e.mem[e.pc+1])
 
-	// Decode
+	fmt.Printf("%x\n", opcode)
+
+	// Decode and Execute
 	switch opcode & 0xf000 {
+	// 0nnn / Multiple Instructions
+	case 0x0000:
+		switch opcode & 0x00ff {
+		// 00E0 CLR / Clear Display
+		case 0xe0:
+			for y := 0; y < len(e.Display); y++ {
+				for x := 0; x < len(e.Display[y]); x++ {
+					e.Display[y][x] = 0x0
+
+				}
+			}
+		// 00EE RET / Return from Subroutine
+		case 0xee:
+			e.pc = e.stack[e.stack_p]
+			e.stack_p--
+			//e.pc -= 2
+		}
 	// 1nnn JP / Jump to Address nnn
 	case 0x1000:
 		e.pc = opcode & 0x0fff
+		e.pc -= 2
 	// 2nnn CALL / Call Subroutine at Address nnn
 	case 0x2000:
 		e.stack_p++
 		e.stack[e.stack_p] = e.pc
+		//fmt.Printf("JSR First in Stack now: %X\n", e.pc)
 		e.pc = opcode & 0x0fff
+		e.pc -= 2
 	// 3xkk SE / Skip next Instruction if Register Vx == kk
 	case 0x3000:
 		if e.V[(opcode&0x0f00)>>8] == byte(opcode&0x00ff) {
@@ -132,7 +162,7 @@ func emulate_cycle() {
 			} else {
 				e.V[0xf] = 0x0
 			}
-			e.V[opcode&0x0f00] = byte(result)
+			e.V[opcode&0x0f00>>8] = byte(result)
 		// 8xy5 SUB / If Value of Vx > Value of Vy then VF = 1 else 0, Result of Vx - Vy is stored in Vx
 		case 0x5:
 			if e.V[opcode&0x0f00>>8] > e.V[opcode&0x00f0>>4] {
@@ -143,7 +173,7 @@ func emulate_cycle() {
 			e.V[opcode&0x0f00>>8] -= e.V[opcode&0x00f0>>4]
 		// 8xy6 SHR / If LSB of Vx is 1 then VF = 1 else 0, then shift Value of Vx 1bit to the right
 		case 0x6:
-			if e.V[opcode&0x0f00>>8]&0xfe == 0x1 {
+			if e.V[opcode&0x0f00>>8]&0x1 == 0x1 {
 				e.V[0xf] = 0x1
 			} else {
 				e.V[0xf] = 0x0
@@ -190,25 +220,88 @@ func emulate_cycle() {
 			pixel_byte := uint8(e.mem[yl+e.index_r])
 			for xl := uint8(0); xl < 8; xl++ {
 				if pixel_byte&(0x80>>xl) != 0 {
-					if e.display[y+uint8(yl)][x+xl] == 0x1 {
+					if e.Display[y+uint8(yl)][x+xl] == 0x1 {
 						e.V[0xf] = 1
 					}
-					e.display[y+uint8(yl)][x+xl] ^= 0x1
+					e.Display[y+uint8(yl)][x+xl] ^= 0x1
 				}
 			}
 		}
-		e.flag_draw = true
+		e.Flag_draw = true
 	// E000 / Multiple Instructions
 	case 0xe000:
 		switch opcode & 0x00ff {
 		// Ex9E SKP / Skip next Instruction if key with value Vx is pressed
-		case 0x90:
+		case 0x9e:
+			if e.keys[e.V[opcode&0x0f00>>8]] == true {
+				e.pc += 2
+			}
+		// ExA1 SKNP / Skip next Instruction if key with value Vx is not pressed
+		case 0xa1:
+			if e.keys[e.V[opcode&0x0f00>>8]] == false {
+				e.pc += 2
+			}
+		}
+	// F000 / Multiple instructions
+	case 0xf000:
+		switch opcode & 0x00ff {
+		// Fx07 LD / Load Value of the Delay Timer into Vx
+		case 0x07:
+			e.V[opcode&0x0f00>>8] = e.delay_timer
+		// Fx0A LD / Wait for a Key press and store the Value of the Key in Vx !!ALL EXECUTIONS STOPPED TILL KEY PRESSED!!
+		case 0x0a:
+			for i, val := range e.keys {
+				if val == true {
+					e.V[opcode&0x0f00>>8] = byte(i)
+				} else {
+					e.pc -= 2
+				}
+			}
+		// Fx15 LD / Load Value of Vx into the Delay Timer
+		case 0x15:
+			e.delay_timer = e.V[opcode&0x0f00>>8]
+		// Fx18 LD / Load Value of Vx into the Sound Timer
+		case 0x18:
+			e.sound_timer = e.V[opcode&0x0f00>>8]
+		// Fx1E ADD / add the Values of I and Vx and Stores the Result in I
+		case 0x1e:
+			if uint16(e.V[opcode&0x0f00>>8])+e.index_r > 0xfff {
+				e.V[0xf] = 1
+			} else {
+				e.V[0xf] = 0
+			}
+			e.index_r += uint16(e.V[opcode&0x0f00>>8])
+		// Fx29 LD / Set I to the location on a hexadecimal Sprite corresponding to the Value of Vx
+		case 0x29:
+			e.index_r = uint16(e.V[opcode&0x0f00>>8]) * 5
+		// Fx33 LD / Stores the Value of Vx encoded as BCD in the memory location I, I+1, I+3 (255 | i=2 | I+1=5 | I+2=5)
+		case 0x33:
+			val := e.V[opcode&0x0f00>>8]
+			e.mem[e.index_r] = val / 100
+			val = val % 100
+			e.mem[e.index_r+1] = val / 10
+			e.mem[e.index_r+2] = val % 10
+		// Fx55 LD / Copies the Values of Registers V0 - Vx into memory locations starting from I
+		case 0x55:
+			for i := uint16(0); i < (opcode & 0x0f00 >> 8); i++ {
+				e.mem[e.index_r+i] = e.V[i]
+			}
+		// Fx65 LD / Copies the Values of the memory locations I - I+x into V0 - Vx
+		case 0x65:
+			for i := uint16(0); i < (opcode & 0x0f00 >> 8); i++ {
+				e.V[i] = e.mem[e.index_r+i]
+			}
 		}
 	}
 
-	fmt.Printf("%x\n", e.pc)
+	e.pc += 2
+	if e.delay_timer > 0 {
+		e.delay_timer -= 1
+	}
+
+	//fmt.Printf("%x\n", e.pc)
 }
 
-func print_mem() {
+func (e *system) Print_mem() {
 	fmt.Println(e.mem)
 }
