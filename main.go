@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/Cubzer/Go-8/emu"
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -9,6 +12,13 @@ const (
 	w_height = 320
 	w_width  = 640
 )
+
+func do_every(d time.Duration, f func()) {
+	for x := range time.Tick(d) {
+		f()
+		fmt.Printf("%t\n", x)
+	}
+}
 
 func main() {
 	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -33,7 +43,7 @@ func main() {
 
 	cpu := emu.Init()
 	cpu.Load_buildin_font()
-	cpu.Load_rom("TETRIS")
+	cpu.Load_rom("TETRIS.ch8")
 	cpu.Print_mem()
 
 	var display_arr [32][64]sdl.Rect // Array of Rect`s which represent the 32x64 Pixel
@@ -46,6 +56,9 @@ func main() {
 	}
 
 	running := true
+
+	go do_every(2*time.Millisecond, cpu.Emulate_cycle)
+	go do_every(17*time.Millisecond, cpu.Dec_timer)
 
 	for running {
 		for ev := sdl.PollEvent(); ev != nil; ev = sdl.PollEvent() {
@@ -137,7 +150,6 @@ func main() {
 			}
 		}
 
-		cpu.Emulate_cycle()
 		window.UpdateSurface()
 
 		sdl.Delay(1000 / 60)

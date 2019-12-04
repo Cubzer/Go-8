@@ -83,6 +83,12 @@ func (e *system) Release_key(key uint8) {
 	e.keys[key] = false
 }
 
+func (e *system) Dec_timer() {
+	if e.delay_timer > 0 {
+		e.delay_timer -= 1
+	}
+}
+
 func (e *system) Emulate_cycle() {
 	// Fetch
 	var opcode uint16
@@ -219,11 +225,13 @@ func (e *system) Emulate_cycle() {
 		for yl := uint16(0); yl < height; yl++ {
 			pixel_byte := uint8(e.mem[yl+e.index_r])
 			for xl := uint8(0); xl < 8; xl++ {
+				real_y := (y + uint8(yl)) % 32
+				real_x := (x + xl) % 64
 				if pixel_byte&(0x80>>xl) != 0 {
-					if e.Display[y+uint8(yl)][x+xl] == 0x1 {
+					if e.Display[real_y][real_x] == 0x1 {
 						e.V[0xf] = 1
 					}
-					e.Display[y+uint8(yl)][x+xl] ^= 0x1
+					e.Display[real_y][real_x] ^= 0x1
 				}
 			}
 		}
@@ -283,21 +291,18 @@ func (e *system) Emulate_cycle() {
 			e.mem[e.index_r+2] = val % 10
 		// Fx55 LD / Copies the Values of Registers V0 - Vx into memory locations starting from I
 		case 0x55:
-			for i := uint16(0); i < (opcode & 0x0f00 >> 8); i++ {
+			for i := uint16(0); i <= (opcode & 0x0f00 >> 8); i++ {
 				e.mem[e.index_r+i] = e.V[i]
 			}
 		// Fx65 LD / Copies the Values of the memory locations I - I+x into V0 - Vx
 		case 0x65:
-			for i := uint16(0); i < (opcode & 0x0f00 >> 8); i++ {
+			for i := uint16(0); i <= (opcode & 0x0f00 >> 8); i++ {
 				e.V[i] = e.mem[e.index_r+i]
 			}
 		}
 	}
 
 	e.pc += 2
-	if e.delay_timer > 0 {
-		e.delay_timer -= 1
-	}
 
 	//fmt.Printf("%x\n", e.pc)
 }
